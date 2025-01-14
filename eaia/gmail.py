@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Iterable
 import pytz
 import os
+import json
 
 from dateutil import parser
 from google.auth.transport.requests import Request
@@ -19,34 +20,31 @@ from langchain_core.tools import tool
 from langchain_core.pydantic_v1 import BaseModel, Field
 
 from eaia.schemas import EmailData
+from eaia.credentials import get_gmail_token, get_google_client_secrets, set_gmail_token
 
 logger = logging.getLogger(__name__)
+_ROOT = Path(__file__).parent.absolute()
 _SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/calendar",
 ]
-_ROOT = Path(__file__).parent.absolute()
 _PORT = 54191
-_SECRETS_DIR = _ROOT / ".secrets"
-_SECRETS_PATH = str(_SECRETS_DIR / "secrets.json")
-_TOKEN_PATH = str(_SECRETS_DIR / "token.json")
 
 
 def get_credentials(
     gmail_token: str | None = None, gmail_secret: str | None = None
 ) -> Credentials:
     creds = None
-    _SECRETS_DIR.mkdir(parents=True, exist_ok=True)
-    gmail_token = gmail_token or os.getenv("GMAIL_TOKEN")
+    # Get token from param or keyring
+    gmail_token = gmail_token or get_gmail_token()
     if gmail_token:
-        with open(_TOKEN_PATH, "w") as token:
-            token.write(gmail_token)
-    gmail_secret = gmail_secret or os.getenv("GMAIL_SECRET")
-    if gmail_secret:
-        with open(_SECRETS_PATH, "w") as secret:
-            secret.write(gmail_secret)
-    if os.path.exists(_TOKEN_PATH):
-        creds = Credentials.from_authorized_user_file(_TOKEN_PATH)
+        try:
+            # Parse token JSON and create credentials directly
+            token_info = json.loads(gmail_token)
+            creds = Credentials.from_authorized_user_info(token_info)
+        except (json.JSONDecodeError, ValueError):
+            # If token is invalid JSON or credentials creation fails, ignore it
+            pass
 
     if not creds or not creds.valid or not creds.has_scopes(_SCOPES):
         if (
@@ -57,10 +55,20 @@ def get_credentials(
         ):
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(_SECRETS_PATH, _SCOPES)
+            # Get client secrets from keyring if not provided
+            client_secrets = gmail_secret or get_google_client_secrets()
+            if not client_secrets:
+                raise ValueError("Google OAuth client secrets not found in keyring or environment")
+            
+            # Parse the JSON string into a dict
+            client_config = json.loads(client_secrets)
+            
+            # Create flow from client config
+            flow = InstalledAppFlow.from_client_config(client_config, _SCOPES)
             creds = flow.run_local_server(port=_PORT)
-        with open(_TOKEN_PATH, "w") as token:
-            token.write(creds.to_json())
+        
+        # Store the new/refreshed token in keyring
+        set_gmail_token(creds.to_json())
 
     return creds
 
