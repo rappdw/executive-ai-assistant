@@ -1,5 +1,5 @@
 from typing import TypedDict
-from eaia.gmail import fetch_group_emails
+from eaia.email_service import fetch_group_emails
 from langgraph_sdk import get_client
 import httpx
 import uuid

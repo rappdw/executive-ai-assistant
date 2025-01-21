@@ -1,13 +1,14 @@
 """Agent responsible for managing calendar and finding meeting time."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import List, Optional
 
-from langchain_core.messages import ToolMessage
-from langchain_core.runnables import RunnableConfig
+from langchain.agents import AgentExecutor
+from langchain.schema import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
-from eaia.gmail import get_events_for_days
+from eaia.email_service import get_events_for_days
 from eaia.schemas import State
 
 from eaia.main.config import get_config

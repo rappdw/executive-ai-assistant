@@ -1,7 +1,7 @@
 import argparse
 import asyncio
 from typing import Optional
-from eaia.gmail import fetch_group_emails
+from eaia.email_service import fetch_group_emails
 from eaia.main.config import get_config
 from langgraph_sdk import get_client
 import httpx
@@ -12,8 +12,8 @@ import hashlib
 async def main(
     url: Optional[str] = None,
     minutes_since: int = 60,
-    gmail_token: Optional[str] = None,
-    gmail_secret: Optional[str] = None,
+    email_token: Optional[str] = None,
+    email_secret: Optional[str] = None,
     early: bool = True,
     rerun: bool = False,
     email: Optional[str] = None,
@@ -33,8 +33,8 @@ async def main(
     for email in fetch_group_emails(
         email_address,
         minutes_since=minutes_since,
-        gmail_token=gmail_token,
-        gmail_secret=gmail_secret,
+        email_token=email_token,
+        email_secret=email_secret,
     ):
         thread_id = str(
             uuid.UUID(hex=hashlib.md5(email["thread_id"].encode("UTF-8")).hexdigest())
@@ -97,16 +97,16 @@ if __name__ == "__main__":
         help="Only process emails that are less than this many minutes old.",
     )
     parser.add_argument(
-        "--gmail-token",
+        "--email-token",
         type=str,
         default=None,
-        help="The token to use in communicating with the Gmail API.",
+        help="The token to use in communicating with the email service.",
     )
     parser.add_argument(
-        "--gmail-secret",
+        "--email-secret",
         type=str,
         default=None,
-        help="The creds to use in communicating with the Gmail API.",
+        help="The creds to use in communicating with the email service.",
     )
     parser.add_argument(
         "--email",
@@ -120,8 +120,8 @@ if __name__ == "__main__":
         main(
             url=args.url,
             minutes_since=args.minutes_since,
-            gmail_token=args.gmail_token,
-            gmail_secret=args.gmail_secret,
+            email_token=args.email_token,
+            email_secret=args.email_secret,
             early=bool(args.early),
             rerun=bool(args.rerun),
             email=args.email,
