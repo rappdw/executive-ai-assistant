@@ -160,3 +160,6 @@ cython_debug/
 
 # Secrets for Google Workspace (Gmail, GCal)
 .secrets/
+
+# VS Code
+.vscode
