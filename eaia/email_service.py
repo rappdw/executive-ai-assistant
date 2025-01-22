@@ -22,20 +22,21 @@ import logging
 from datetime import datetime
 from typing import Iterable, List, Optional, Dict
 
+from zen_email_service.reader import GmailAPIEmailReader, GraphAPIEmailReader
+from eaia.schemas import EmailData
 from eaia.gmail import (
-    fetch_group_emails as gmail_fetch_emails,
     mark_as_read as gmail_mark_as_read,
     get_events_for_days as gmail_get_events,
     send_calendar_invite as gmail_send_calendar_invite,
     send_email as gmail_send_email,
 )
-from eaia.schemas import EmailData
 
 logger = logging.getLogger(__name__)
 
 def fetch_group_emails(
     to_email: str,
     minutes_since: int = 30,
+    service: str = "gmail",
     gmail_token: Optional[str] = None,
     gmail_secret: Optional[str] = None,
 ) -> Iterable[EmailData]:
@@ -45,21 +46,43 @@ def fetch_group_emails(
     Args:
         to_email: The email address to fetch messages for
         minutes_since: Only fetch emails from the last N minutes
+        service: Email service to use ("gmail" or "ms"). Defaults to "gmail"
         gmail_token: Optional Gmail API token. If not provided, will attempt to fetch from keyring
         gmail_secret: Optional Gmail API secret. If not provided, will attempt to fetch from keyring
 
     Returns:
-        An iterator of EmailData objects containing the fetched emails
+        An iterable of EmailData objects containing the email messages
 
     Raises:
         ValueError: If credentials cannot be found in keyring when not provided as parameters
+                   or if an invalid service is specified
     """
-    return gmail_fetch_emails(
-        to_email,
+    if service not in ["gmail", "ms"]:
+        raise ValueError('service must be either "gmail" or "ms"')
+        
+    if service == "gmail":
+        reader = GmailAPIEmailReader()
+    else:
+        reader = GraphAPIEmailReader()
+        
+    zen_emails = reader.fetch_emails(
         minutes_since=minutes_since,
-        gmail_token=gmail_token,
-        gmail_secret=gmail_secret,
+        include_read=False,
+        all_folders=False,
+        use_tqdm=False
     )
+    
+    # Convert zen_email_service.EmailData to schemas.EmailData
+    for email in zen_emails:
+        yield EmailData(
+            id=email.id,
+            thread_id=email.thread_id,
+            from_email=email.sender,
+            subject=email.subject,
+            page_content=email.body,
+            send_time=email.received_date,
+            to_email=email.recipients[0] if email.recipients else to_email
+        )
 
 def mark_as_read(
     message_id: str,

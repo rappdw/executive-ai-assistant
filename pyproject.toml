@@ -22,6 +22,7 @@ pyyaml = "*"
 python-dateutil = "^2.9.0.post0"
 python-dotenv = "^1.0.1"
 keyring = "^24.3.0"
+zen-email-service = {git = "ssh://git@ghe/drapp_pfpt/zen_email_service.git", rev = "v0.1.0"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
