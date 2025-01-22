@@ -44,7 +44,12 @@ Table of contents
 
 ### Configuration
 
-The configuration for EAIA can be found in `eaia/main/config.yaml`. Every key in there is required. These are the configuration options:
+The configuration for EAIA is stored in a standard OS-specific location:
+- macOS: `~/Library/Application Support/eaia/config.yaml`
+- Linux: `~/.config/eaia/config.yaml` (or `$XDG_CONFIG_HOME/eaia/config.yaml` if set)
+- Windows: `%APPDATA%\eaia\config.yaml`
+
+When you first run EAIA locally, it will create this file automatically with default values if it doesn't exist. Every key in the config file is required. These are the configuration options:
 
 - `email`: Email to monitor and send emails as. This should match the credentials you loaded above.
 - `full_name`: Full name of user
