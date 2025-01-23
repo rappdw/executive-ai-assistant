@@ -20,8 +20,7 @@ from the system keyring if not specified.
 
 import logging
 from datetime import datetime
-from typing import Iterable, List, Optional, Dict
-
+from typing import Iterable, List, Optional, Dict, Any
 from zen_email_service.reader import GmailAPIEmailReader, GraphAPIEmailReader
 from eaia.schemas import EmailData
 from eaia.gmail import (
@@ -89,8 +88,21 @@ def mark_as_read(
     gmail_token: Optional[str] = None,
     gmail_secret: Optional[str] = None,
 ) -> None:
-    """
-    Mark an email message as read.
+    """Mark an email message as read.
+    
+    Required Implementation:
+    1. Email Status Update:
+       - Update email flags/labels
+       - Handle both single emails and conversation threads
+       - Maintain audit trail of status changes
+    
+    2. Synchronization:
+       - Ensure changes are synced across devices
+       - Handle offline/online state
+       
+    3. Error Handling:
+       - Handle non-existent email IDs
+       - Retry logic for API failures
 
     Args:
         message_id: The ID of the message to mark as read
@@ -100,19 +112,37 @@ def mark_as_read(
     Raises:
         ValueError: If credentials cannot be found in keyring when not provided as parameters
     """
-    gmail_mark_as_read(
-        message_id,
-        gmail_token=gmail_token,
-        gmail_secret=gmail_secret,
-    )
+    # TODO: Implement email status update
+    print(f"Would mark email {email_id} as read")
+    return True
 
 def get_events_for_days(
     date_strs: List[str],
     gmail_token: Optional[str] = None,
     gmail_secret: Optional[str] = None,
 ) -> List[Dict]:
-    """
-    Retrieve calendar events for specified dates.
+    """Get calendar events for a list of dates.
+    
+    Required Implementation:
+    1. Date Range Handling:
+       - Handle timezone conversions
+       - Support different date formats
+       - Validate date ranges
+       
+    2. Event Retrieval:
+       - Fetch all event types (meetings, appointments, etc.)
+       - Include recurring events
+       - Handle all-day events
+       
+    3. Event Details:
+       - Get attendee status/responses
+       - Include conference details
+       - Handle private/public event visibility
+       
+    4. Performance:
+       - Implement caching for frequent requests
+       - Batch API calls
+       - Handle pagination for large date ranges
 
     Args:
         date_strs: List of date strings in YYYY-MM-DD format
@@ -125,11 +155,17 @@ def get_events_for_days(
     Raises:
         ValueError: If credentials cannot be found in keyring when not provided as parameters
     """
-    return gmail_get_events(
-        date_strs,
-        gmail_token=gmail_token,
-        gmail_secret=gmail_secret,
-    )
+    # TODO: Implement calendar event fetching
+    # Return mock data for now
+    return [
+        {
+            "start": (start_date + datetime.timedelta(days=i, hours=9)).isoformat(),
+            "end": (start_date + datetime.timedelta(days=i, hours=10)).isoformat(),
+            "title": f"Mock Meeting {i}",
+            "attendees": ["user@example.com"],
+        }
+        for i in range(num_days)
+    ]
 
 def send_calendar_invite(
     emails: List[str],
@@ -141,8 +177,28 @@ def send_calendar_invite(
     gmail_token: Optional[str] = None,
     gmail_secret: Optional[str] = None,
 ) -> None:
-    """
-    Send a calendar invitation to specified email addresses.
+    """Send a calendar invitation.
+    
+    Required Implementation:
+    1. Calendar Event Creation:
+       - Generate proper iCal/ICS format
+       - Set timezone information correctly
+       - Handle recurring events (future)
+       
+    2. Attendee Management:
+       - Validate email addresses
+       - Set proper attendee roles (required/optional)
+       - Handle room/resource booking
+       
+    3. Integration Requirements:
+       - Ensure compatibility with major calendar systems
+       - Handle different calendar providers
+       - Support conference links (Zoom, Meet, etc.)
+       
+    4. Update/Cancel Support:
+       - Allow modifying existing events
+       - Handle cancellation notifications
+       - Support rescheduling
 
     Args:
         emails: List of email addresses to send the invite to
@@ -157,16 +213,9 @@ def send_calendar_invite(
     Raises:
         ValueError: If credentials cannot be found in keyring when not provided as parameters
     """
-    gmail_send_calendar_invite(
-        emails,
-        title,
-        start_time,
-        end_time,
-        email_address,
-        timezone=timezone,
-        gmail_token=gmail_token,
-        gmail_secret=gmail_secret,
-    )
+    # TODO: Implement calendar invite
+    print(f"Would send calendar invite to {attendees} for {title}")
+    return True
 
 def send_email(
     email_id: str,
@@ -176,8 +225,27 @@ def send_email(
     gmail_secret: Optional[str] = None,
     addn_receipients: Optional[List[str]] = None,
 ) -> None:
-    """
-    Send an email response.
+    """Send an email response.
+    
+    Required Implementation:
+    1. Email Content Preparation:
+       - Format email body (plain text and HTML versions)
+       - Handle email threading via thread_id if provided
+       - Validate email addresses
+    
+    2. Email Headers:
+       - Set proper Reply-To headers
+       - Include References and In-Reply-To headers for threading
+       - Add Message-ID
+       
+    3. Error Handling:
+       - Handle rate limiting
+       - Retry logic for transient failures
+       - Validate email was actually sent
+       
+    4. Attachments (future):
+       - Support file attachments
+       - Handle inline images
 
     Args:
         email_id: ID of the email being responded to
@@ -190,11 +258,6 @@ def send_email(
     Raises:
         ValueError: If credentials cannot be found in keyring when not provided as parameters
     """
-    gmail_send_email(
-        email_id,
-        response_text,
-        email_address,
-        gmail_token=gmail_token,
-        gmail_secret=gmail_secret,
-        addn_receipients=addn_receipients,
-    )
+    # TODO: Implement actual email sending
+    print(f"Would send email to {to_email}: {subject}")
+    return True
