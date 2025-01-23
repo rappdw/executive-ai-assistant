@@ -28,7 +28,10 @@ Emails that are worth responding to:
 There are also other things that {name} should know about, but don't require an email response. For these, you should notify {name} (using the `notify` response). Examples of this include:
 {triage_notify}
 
-For emails not worth responding to, respond `no`. For something where {name} should respond over email, respond `email`. If it's important to notify {name}, but no email is required, respond `notify`. \
+Some emails are from subscriptions, newsletters, or marketing that {name} may want to unsubscribe from to reduce inbox clutter. For these, respond with `cleanup`. Examples include:
+{triage_cleanup}
+
+For emails not worth responding to, respond `no`. For something where {name} should respond over email, respond `email`. If it's important to notify {name}, but no email is required, respond `notify`. For subscription/newsletter emails that should be cleaned up, respond `cleanup`.
 
 If unsure, opt to `notify` {name} - you will learn from this in the future.
 
@@ -60,6 +63,7 @@ async def triage_input(state: State, config: RunnableConfig, store: BaseStore):
         triage_no=prompt_config["triage_no"],
         triage_email=prompt_config["triage_email"],
         triage_notify=prompt_config["triage_notify"],
+        triage_cleanup=prompt_config["triage_cleanup"],
     )
     model = llm.with_structured_output(RespondTo).bind(
         tool_choice={"type": "function", "function": {"name": "RespondTo"}}

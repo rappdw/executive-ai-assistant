@@ -26,11 +26,12 @@ from eaia.email_service import (
 from eaia.schemas import (
     State,
 )
+from eaia.web_browser_service import WebBrowserService
 
 
 def route_after_triage(
     state: State,
-) -> Literal["draft_response", "mark_as_read_node", "notify"]:
+) -> Literal["draft_response", "mark_as_read_node", "notify", "cleanup_node"]:
     if state["triage"].response == "email":
         return "draft_response"
     elif state["triage"].response == "no":
@@ -39,6 +40,9 @@ def route_after_triage(
         return "notify"
     elif state["triage"].response == "question":
         return "draft_response"
+    elif state["triage"].response == "cleanup":
+        # For now, we'll just mark it as read until we implement the cleanup functionality
+        return "cleanup_node"
     else:
         raise ValueError
 
@@ -154,6 +158,28 @@ def human_node(state: State):
     pass
 
 
+async def cleanup_node(state: State, config: RunnableConfig):
+    """Handle cleanup of subscription/newsletter emails."""
+    browser_service = WebBrowserService()
+    try:
+        success = await browser_service.cleanup_subscription(state["email"])
+        if success:
+            return {"messages": [ToolMessage(content="Successfully unsubscribed from newsletter.")]}
+        else:
+            return {"messages": [ToolMessage(content="Failed to unsubscribe automatically. Marking for manual review.")]}
+    finally:
+        await browser_service.close()
+
+
+def route_after_cleanup(state: State) -> Literal["mark_as_read_node", "notify"]:
+    """Route based on cleanup success."""
+    # Check the last message to determine if cleanup was successful
+    last_message = state["messages"][-1]
+    if "Successfully unsubscribed" in last_message.content:
+        return "mark_as_read_node"
+    return "notify"
+
+
 class ConfigSchema(TypedDict):
     db_id: int
     model: str
@@ -172,6 +198,7 @@ graph_builder.add_node(bad_tool_name)
 graph_builder.add_node(notify)
 graph_builder.add_node(send_cal_invite_node)
 graph_builder.add_node(send_cal_invite)
+graph_builder.add_node(cleanup_node)
 graph_builder.add_conditional_edges("triage_input", route_after_triage)
 graph_builder.set_entry_point("triage_input")
 graph_builder.add_conditional_edges("draft_response", take_action)
@@ -187,4 +214,5 @@ graph_builder.add_edge("send_email_draft", "human_node")
 graph_builder.add_edge("mark_as_read_node", END)
 graph_builder.add_edge("notify", "human_node")
 graph_builder.add_conditional_edges("human_node", enter_after_human)
+graph_builder.add_conditional_edges("cleanup_node", route_after_cleanup)
 graph = graph_builder.compile()

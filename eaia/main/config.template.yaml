@@ -49,4 +49,11 @@ triage_email: |
   - Emails from friends - even these don't ask an explicit question, if it seems like something a good friend would respond to, Harrison should do so.
 
   Reminder - automated calendar invites do NOT count as real emails
+triage_cleanup: |
+  - Marketing newsletters with low engagement history (e.g. "Check out our latest products!", "Don't miss this week's deals")
+  - Promotional emails from services you haven't used in months
+  - Recurring notifications that could be consolidated (e.g. daily updates that could be weekly)
+  - Subscription-based content you haven't opened in the last 3 months
+  - Multiple emails from the same service that send too frequently
+  - Social media notifications that aren't critical to your work
 memory: true
