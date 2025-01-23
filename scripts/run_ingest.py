@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import argparse
 import asyncio
 from typing import Optional
@@ -17,6 +18,7 @@ async def main(
     early: bool = True,
     rerun: bool = False,
     email: Optional[str] = None,
+    service: str = "gmail",
 ):
     if email is None:
         email_address = get_config({"configurable": {}})["email"]
@@ -33,8 +35,9 @@ async def main(
     for email in fetch_group_emails(
         email_address,
         minutes_since=minutes_since,
-        email_token=email_token,
-        email_secret=email_secret,
+        service=service,
+        gmail_token=email_token,
+        gmail_secret=email_secret,
     ):
         thread_id = str(
             uuid.UUID(hex=hashlib.md5(email["thread_id"].encode("UTF-8")).hexdigest())
@@ -75,46 +78,52 @@ if __name__ == "__main__":
     parser.add_argument(
         "--url",
         type=str,
+        help="URL of the agent to connect to",
         default=None,
-        help="URL to run against",
-    )
-    parser.add_argument(
-        "--early",
-        type=int,
-        default=1,
-        help="whether to break when encountering seen emails",
-    )
-    parser.add_argument(
-        "--rerun",
-        type=int,
-        default=0,
-        help="whether to rerun all emails",
     )
     parser.add_argument(
         "--minutes-since",
         type=int,
+        help="Number of minutes to look back",
         default=60,
-        help="Only process emails that are less than this many minutes old.",
     )
     parser.add_argument(
         "--email-token",
         type=str,
+        help="Gmail token",
         default=None,
-        help="The token to use in communicating with the email service.",
     )
     parser.add_argument(
         "--email-secret",
         type=str,
+        help="Gmail secret",
         default=None,
-        help="The creds to use in communicating with the email service.",
+    )
+    parser.add_argument(
+        "--early",
+        action="store_true",
+        help="Whether to early exit if there are no emails",
+        default=True,
+    )
+    parser.add_argument(
+        "--rerun",
+        action="store_true",
+        help="Whether to rerun all emails",
+        default=False,
     )
     parser.add_argument(
         "--email",
         type=str,
+        help="Email address to use",
         default=None,
-        help="The email address to use",
     )
-
+    parser.add_argument(
+        "--service",
+        type=str,
+        choices=["gmail", "ms"],
+        help="Email service to use (gmail or ms)",
+        default="gmail",
+    )
     args = parser.parse_args()
     asyncio.run(
         main(
@@ -122,8 +131,9 @@ if __name__ == "__main__":
             minutes_since=args.minutes_since,
             email_token=args.email_token,
             email_secret=args.email_secret,
-            early=bool(args.early),
-            rerun=bool(args.rerun),
+            early=args.early,
+            rerun=args.rerun,
             email=args.email,
+            service=args.service,
         )
     )

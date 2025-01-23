@@ -73,7 +73,7 @@ See [this section](#run-in-production--langgraph-cloud-) for instructions on how
 ### Set up EAIA locally
 
 1. Install development server `pip install -U "langgraph-cli[inmem]"`
-2. Run development server `langgraph dev`
+2. Run development server. Use `scripts/start_dev.py` to load env from keycahin, or `langgraph dev` if your environment is already set up.
 
 ### Ingest Emails Locally
 
@@ -82,7 +82,7 @@ Let's now kick off an ingest job to ingest some emails and run them through our 
 Leave the `langgraph dev` command running, and open a new terminal. From there, get back into this directory and virtual environment. To kick off an ingest job, run:
 
 ```shell
-python scripts/run_ingest.py --minutes-since 120 --rerun 1 --early 0
+python scripts/run_ingest.py --minutes-since 120 --rerun --early
 ```
 
 This will ingest all emails in the last 120 minutes (`--minutes-since`). It will NOT break early if it sees an email it already saw (`--early 0`) and it will

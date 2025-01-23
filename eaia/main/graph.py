@@ -14,16 +14,14 @@ from langchain_core.messages import ToolMessage
 from eaia.main.human_inbox import (
     send_message,
     send_email_draft,
+    notify,
+    send_cal_invite,
 )
 from eaia.email_service import (
     send_email,
     mark_as_read,
     send_calendar_invite,
     get_events_for_days,
-)
-from eaia.main.notify import (
-    notify,
-    send_cal_invite,
 )
 from eaia.schemas import (
     State,

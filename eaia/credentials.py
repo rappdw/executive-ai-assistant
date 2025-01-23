@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 # Service names for keyring
-KEYRING_SERVICE = "executive_ai_assistant"
+KEYRING_SERVICE = "zen_inbox"
 OPENAI_KEY_NAME = "openai_api_key"
 ANTHROPIC_KEY_NAME = "anthropic_api_key"
 GMAIL_TOKEN_NAME = "gmail_token"
@@ -117,3 +117,6 @@ def load_credentials_to_env() -> None:
         key = get_langsmith_api_key()
         if key:
             os.environ["LANGSMITH_API_KEY"] = key
+
+    if not os.getenv("LANGSMITH_PROJECT"):
+        os.environ["LANGSMITH_PROJECT"] = "Zen_Inbox"

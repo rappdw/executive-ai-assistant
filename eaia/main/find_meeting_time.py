@@ -7,6 +7,7 @@ from langchain.agents import AgentExecutor
 from langchain.schema import AIMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
+from langchain_core.runnables import RunnableConfig
 
 from eaia.email_service import get_events_for_days
 from eaia.schemas import State
