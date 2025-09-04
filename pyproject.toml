@@ -21,6 +21,9 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "langgraph-cli[inmem]>=0.3.6",
     "langgraph-api>=0.2.134",
+    "msal>=1.24.0",
+    "msgraph-core>=0.2.2",
+    "requests>=2.31.0",
 ]
 
 [project.optional-dependencies]
