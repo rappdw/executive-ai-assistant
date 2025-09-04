@@ -7,9 +7,12 @@ using Microsoft Graph API, designed to match the Gmail module interface.
 
 import logging
 from datetime import datetime, timedelta, time
-from typing import Iterable, List, Optional, Any
+from typing import Iterable, List, Optional, Any, Dict
 import os
+import json
+from pathlib import Path
 
+import msal
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
@@ -18,12 +21,59 @@ from eaia.schemas import EmailData
 logger = logging.getLogger(__name__)
 
 # Microsoft Graph API scopes required for email and calendar access
-_SCOPES = [
+_EXCHANGE_SCOPES = [
     "https://graph.microsoft.com/Mail.ReadWrite",
     "https://graph.microsoft.com/Mail.Send", 
     "https://graph.microsoft.com/Calendars.ReadWrite",
     "https://graph.microsoft.com/User.Read",
 ]
+
+# Token cache file location
+_TOKEN_CACHE_FILE = Path.home() / ".eaia" / "exchange_token_cache.json"
+
+
+class ExchangeCredentials:
+    """Exchange credentials wrapper compatible with existing patterns."""
+    
+    def __init__(self, access_token: str, expires_in: int = 3600, refresh_token: Optional[str] = None):
+        self.token = access_token
+        self.expires_in = expires_in
+        self.refresh_token = refresh_token
+        self.scopes = _EXCHANGE_SCOPES
+        
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert credentials to dictionary format."""
+        return {
+            "access_token": self.token,
+            "expires_in": self.expires_in,
+            "refresh_token": self.refresh_token,
+            "scopes": self.scopes
+        }
+
+
+def _get_token_cache() -> msal.SerializableTokenCache:
+    """Get or create token cache for MSAL."""
+    cache = msal.SerializableTokenCache()
+    
+    if _TOKEN_CACHE_FILE.exists():
+        try:
+            with open(_TOKEN_CACHE_FILE, 'r') as f:
+                cache.deserialize(f.read())
+        except (json.JSONDecodeError, IOError) as e:
+            logger.warning(f"Failed to load token cache: {e}")
+    
+    return cache
+
+
+def _save_token_cache(cache: msal.SerializableTokenCache) -> None:
+    """Save token cache to file."""
+    try:
+        _TOKEN_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        if cache.has_state_changed:
+            with open(_TOKEN_CACHE_FILE, 'w') as f:
+                f.write(cache.serialize())
+    except IOError as e:
+        logger.warning(f"Failed to save token cache: {e}")
 
 
 async def get_exchange_credentials(
@@ -31,7 +81,7 @@ async def get_exchange_credentials(
     tenant_id: str,
     client_id: str,
     client_secret: str
-) -> dict:
+) -> ExchangeCredentials:
     """Get Microsoft Graph API credentials using MSAL.
     
     Args:
@@ -41,14 +91,185 @@ async def get_exchange_credentials(
         client_secret: Azure AD application client secret
         
     Returns:
-        Dictionary containing access token and related auth info
+        ExchangeCredentials object containing access token and related auth info
         
     Raises:
         ValueError: If authentication fails or required parameters are missing
+        Exception: If MSAL authentication flow fails
     """
-    # TODO: Implement MSAL authentication flow
-    # This will be implemented in Stage 2
-    raise NotImplementedError("Exchange authentication will be implemented in Stage 2")
+    if not all([user_email, tenant_id, client_id, client_secret]):
+        raise ValueError("All authentication parameters (user_email, tenant_id, client_id, client_secret) are required")
+    
+    try:
+        # Get token cache
+        cache = _get_token_cache()
+        
+        # Create MSAL confidential client application
+        authority = f"https://login.microsoftonline.com/{tenant_id}"
+        app = msal.ConfidentialClientApplication(
+            client_id=client_id,
+            client_credential=client_secret,
+            authority=authority,
+            token_cache=cache
+        )
+        
+        # Try to get token from cache first
+        accounts = app.get_accounts(username=user_email)
+        result = None
+        
+        if accounts:
+            logger.info(f"Found cached account for {user_email}")
+            # Try to get token silently from cache
+            result = app.acquire_token_silent(
+                scopes=_EXCHANGE_SCOPES,
+                account=accounts[0]
+            )
+        
+        if not result:
+            logger.info(f"No cached token found, initiating device flow for {user_email}")
+            # Initiate device flow for interactive authentication
+            device_flow = app.initiate_device_flow(scopes=_EXCHANGE_SCOPES)
+            
+            if "user_code" not in device_flow:
+                raise Exception("Failed to create device flow")
+            
+            print(f"\nTo authenticate with Exchange/Outlook:")
+            print(f"1. Go to: {device_flow['verification_uri']}")
+            print(f"2. Enter code: {device_flow['user_code']}")
+            print("3. Complete the authentication process")
+            print("Waiting for authentication...")
+            
+            # Complete device flow
+            result = app.acquire_token_by_device_flow(device_flow)
+        
+        # Save token cache
+        _save_token_cache(cache)
+        
+        # Check if authentication was successful
+        if "access_token" not in result:
+            error_msg = result.get("error_description", "Unknown authentication error")
+            logger.error(f"Authentication failed: {error_msg}")
+            raise Exception(f"Authentication failed: {error_msg}")
+        
+        logger.info(f"Successfully authenticated {user_email}")
+        
+        # Return credentials object
+        return ExchangeCredentials(
+            access_token=result["access_token"],
+            expires_in=result.get("expires_in", 3600),
+            refresh_token=result.get("refresh_token")
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to get Exchange credentials: {e}")
+        raise
+
+
+async def refresh_exchange_token(
+    user_email: str,
+    tenant_id: str,
+    client_id: str,
+    client_secret: str
+) -> Optional[ExchangeCredentials]:
+    """Refresh Exchange access token using cached refresh token.
+    
+    Args:
+        user_email: User's Exchange email address
+        tenant_id: Azure AD tenant ID
+        client_id: Azure AD application client ID
+        client_secret: Azure AD application client secret
+        
+    Returns:
+        ExchangeCredentials object with new access token, or None if refresh failed
+        
+    Raises:
+        Exception: If token refresh fails
+    """
+    try:
+        # Get token cache
+        cache = _get_token_cache()
+        
+        # Create MSAL confidential client application
+        authority = f"https://login.microsoftonline.com/{tenant_id}"
+        app = msal.ConfidentialClientApplication(
+            client_id=client_id,
+            client_credential=client_secret,
+            authority=authority,
+            token_cache=cache
+        )
+        
+        # Try to get accounts from cache
+        accounts = app.get_accounts(username=user_email)
+        
+        if not accounts:
+            logger.warning(f"No cached accounts found for {user_email}")
+            return None
+        
+        # Try to acquire token silently (this will use refresh token if needed)
+        result = app.acquire_token_silent(
+            scopes=_EXCHANGE_SCOPES,
+            account=accounts[0]
+        )
+        
+        # Save updated cache
+        _save_token_cache(cache)
+        
+        if result and "access_token" in result:
+            logger.info(f"Successfully refreshed token for {user_email}")
+            return ExchangeCredentials(
+                access_token=result["access_token"],
+                expires_in=result.get("expires_in", 3600),
+                refresh_token=result.get("refresh_token")
+            )
+        else:
+            error_msg = result.get("error_description", "Token refresh failed") if result else "No result from token refresh"
+            logger.warning(f"Token refresh failed for {user_email}: {error_msg}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Failed to refresh Exchange token: {e}")
+        raise
+
+
+def validate_exchange_scopes(required_scopes: List[str]) -> bool:
+    """Validate that required scopes are included in the Exchange scopes.
+    
+    Args:
+        required_scopes: List of required Microsoft Graph scopes
+        
+    Returns:
+        bool: True if all required scopes are available, False otherwise
+    """
+    return all(scope in _EXCHANGE_SCOPES for scope in required_scopes)
+
+
+def get_exchange_auth_from_env(user_email: str) -> tuple[str, str, str]:
+    """Get Exchange authentication parameters from environment variables.
+    
+    Args:
+        user_email: User's Exchange email address (for logging)
+        
+    Returns:
+        tuple: (tenant_id, client_id, client_secret)
+        
+    Raises:
+        ValueError: If required environment variables are not set
+    """
+    tenant_id = os.getenv("EXCHANGE_TENANT_ID")
+    client_id = os.getenv("EXCHANGE_CLIENT_ID") 
+    client_secret = os.getenv("EXCHANGE_CLIENT_SECRET")
+    
+    if not all([tenant_id, client_id, client_secret]):
+        missing = []
+        if not tenant_id:
+            missing.append("EXCHANGE_TENANT_ID")
+        if not client_id:
+            missing.append("EXCHANGE_CLIENT_ID")
+        if not client_secret:
+            missing.append("EXCHANGE_CLIENT_SECRET")
+        raise ValueError(f"Missing required environment variables for {user_email}: {', '.join(missing)}")
+    
+    return tenant_id, client_id, client_secret
 
 
 async def fetch_exchange_emails(

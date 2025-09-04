@@ -392,6 +392,7 @@ dependencies = [
     { name = "langchain" },
     { name = "langchain-anthropic" },
     { name = "langchain-auth" },
+    { name = "langchain-core" },
     { name = "langchain-openai" },
     { name = "langgraph" },
     { name = "langgraph-api" },
@@ -418,6 +419,11 @@ dev = [
     { name = "vcrpy" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest-asyncio" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "google-api-python-client", specifier = ">=2.128.0" },
@@ -425,6 +431,7 @@ requires-dist = [
     { name = "langchain", specifier = ">=0.3.9" },
     { name = "langchain-anthropic", specifier = ">=0.3" },
     { name = "langchain-auth", specifier = ">=0.1.2" },
+    { name = "langchain-core", specifier = ">=0.3.0" },
     { name = "langchain-openai", specifier = ">=0.2" },
     { name = "langgraph", specifier = ">=0.4.5" },
     { name = "langgraph-api", specifier = ">=0.2.134" },
@@ -446,6 +453,9 @@ requires-dist = [
     { name = "vcrpy", marker = "extra == 'dev'", specifier = ">=6.0.1" },
 ]
 provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest-asyncio", specifier = ">=1.1.0" }]
 
 [[package]]
 name = "executing"
