@@ -734,7 +734,7 @@ async def send_exchange_email(
         raise
 
 
-def mark_exchange_as_read(
+async def mark_exchange_as_read(
     message_id: str,
     user_email: str,
     tenant_id: Optional[str] = None,
@@ -757,9 +757,200 @@ def mark_exchange_as_read(
         ValueError: If authentication fails or required parameters are missing
         Exception: If API call fails
     """
-    # TODO: Implement Exchange message status update using Microsoft Graph API
-    # This will be implemented in Stage 5
-    raise NotImplementedError("Exchange message status update will be implemented in Stage 5")
+    import requests
+    import asyncio
+    
+    try:
+        # Validate message ID format
+        if not message_id or not isinstance(message_id, str):
+            raise ValueError("Invalid message ID provided")
+        
+        # Get authentication credentials
+        credentials = await get_exchange_credentials(
+            user_email=user_email,
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret
+        )
+        
+        # Build Graph API request
+        headers = {
+            "Authorization": f"Bearer {credentials['access_token']}",
+            "Content-Type": "application/json"
+        }
+        
+        graph_url = f"https://graph.microsoft.com/v1.0/me/messages/{message_id}"
+        
+        # Payload to mark message as read
+        payload = {
+            "isRead": True
+        }
+        
+        # Retry logic for transient failures
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = requests.patch(
+                    graph_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=30
+                )
+                
+                if response.status_code == 200:
+                    logger.info(f"Message {message_id} marked as read successfully")
+                    return True
+                elif response.status_code == 404:
+                    logger.error(f"Message {message_id} not found")
+                    raise ValueError(f"Message with ID {message_id} not found")
+                elif response.status_code == 429:  # Rate limited
+                    retry_after = int(response.headers.get('Retry-After', 60))
+                    logger.warning(f"Rate limited, retrying after {retry_after} seconds")
+                    await asyncio.sleep(retry_after)
+                    continue
+                else:
+                    error_msg = f"Failed to mark message as read. Status: {response.status_code}, Response: {response.text}"
+                    logger.error(error_msg)
+                    if attempt == max_retries - 1:  # Last attempt
+                        raise Exception(error_msg)
+                    
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Request failed on attempt {attempt + 1}: {e}")
+                if attempt == max_retries - 1:  # Last attempt
+                    raise Exception(f"Failed to mark message as read after {max_retries} attempts: {e}")
+                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+        
+        return False
+        
+    except Exception as e:
+        logger.error(f"Error marking Exchange message as read: {e}")
+        raise
+
+
+async def mark_exchange_messages_as_read_batch(
+    message_ids: List[str],
+    user_email: str,
+    tenant_id: Optional[str] = None,
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
+) -> Dict[str, bool]:
+    """Mark multiple Exchange emails as read using batch operations.
+    
+    Args:
+        message_ids: List of message IDs to mark as read
+        user_email: User's Exchange email address
+        tenant_id: Azure AD tenant ID (optional, can be from env)
+        client_id: Azure AD client ID (optional, can be from env)
+        client_secret: Azure AD client secret (optional, can be from env)
+        
+    Returns:
+        Dict[str, bool]: Dictionary mapping message IDs to success status
+        
+    Raises:
+        ValueError: If authentication fails or required parameters are missing
+        Exception: If API call fails
+    """
+    import requests
+    import asyncio
+    
+    if not message_ids:
+        return {}
+    
+    try:
+        # Get authentication credentials
+        credentials = await get_exchange_credentials(
+            user_email=user_email,
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret
+        )
+        
+        # Build Graph API batch request
+        headers = {
+            "Authorization": f"Bearer {credentials['access_token']}",
+            "Content-Type": "application/json"
+        }
+        
+        # Create batch request payload
+        batch_requests = []
+        for i, message_id in enumerate(message_ids):
+            if not message_id or not isinstance(message_id, str):
+                logger.warning(f"Skipping invalid message ID: {message_id}")
+                continue
+                
+            batch_requests.append({
+                "id": str(i),
+                "method": "PATCH",
+                "url": f"/me/messages/{message_id}",
+                "body": {"isRead": True},
+                "headers": {"Content-Type": "application/json"}
+            })
+        
+        if not batch_requests:
+            logger.warning("No valid message IDs provided for batch operation")
+            return {}
+        
+        batch_payload = {"requests": batch_requests}
+        graph_batch_url = "https://graph.microsoft.com/v1.0/$batch"
+        
+        # Execute batch request with retry logic
+        max_retries = 3
+        results = {}
+        
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    graph_batch_url,
+                    headers=headers,
+                    json=batch_payload,
+                    timeout=60  # Longer timeout for batch operations
+                )
+                
+                if response.status_code == 200:
+                    batch_response = response.json()
+                    
+                    # Process batch response
+                    for i, batch_result in enumerate(batch_response.get("responses", [])):
+                        request_id = int(batch_result.get("id", i))
+                        if request_id < len(message_ids):
+                            message_id = message_ids[request_id]
+                            status_code = batch_result.get("status", 500)
+                            
+                            if status_code == 200:
+                                results[message_id] = True
+                                logger.info(f"Message {message_id} marked as read successfully")
+                            elif status_code == 404:
+                                results[message_id] = False
+                                logger.warning(f"Message {message_id} not found")
+                            else:
+                                results[message_id] = False
+                                logger.error(f"Failed to mark message {message_id} as read. Status: {status_code}")
+                    
+                    return results
+                    
+                elif response.status_code == 429:  # Rate limited
+                    retry_after = int(response.headers.get('Retry-After', 60))
+                    logger.warning(f"Batch operation rate limited, retrying after {retry_after} seconds")
+                    await asyncio.sleep(retry_after)
+                    continue
+                else:
+                    error_msg = f"Batch operation failed. Status: {response.status_code}, Response: {response.text}"
+                    logger.error(error_msg)
+                    if attempt == max_retries - 1:  # Last attempt
+                        raise Exception(error_msg)
+                    
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Batch request failed on attempt {attempt + 1}: {e}")
+                if attempt == max_retries - 1:  # Last attempt
+                    raise Exception(f"Failed to execute batch operation after {max_retries} attempts: {e}")
+                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+        
+        # If we get here, all attempts failed
+        return {msg_id: False for msg_id in message_ids}
+        
+    except Exception as e:
+        logger.error(f"Error in batch mark as read operation: {e}")
+        raise
 
 
 class ExchangeCalInput(BaseModel):
