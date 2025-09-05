@@ -11,8 +11,10 @@ from typing import Iterable, List, Optional, Any, Dict
 import os
 import json
 from pathlib import Path
+import asyncio
 
 import msal
+import requests
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
@@ -1287,9 +1289,263 @@ def send_exchange_calendar_invite(
         ValueError: If authentication fails or required parameters are missing
         Exception: If API call fails
     """
-    # TODO: Implement Exchange calendar invite sending using Microsoft Graph API
-    # This will be implemented in Stage 7
-    raise NotImplementedError("Exchange calendar invite sending will be implemented in Stage 7")
+    try:
+        # Run async calendar invite creation
+        return asyncio.run(_send_exchange_calendar_invite_async(
+            emails=emails,
+            title=title,
+            start_time=start_time,
+            end_time=end_time,
+            user_email=user_email,
+            timezone=timezone,
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret
+        ))
+    except Exception as e:
+        logger.error(f"Failed to send Exchange calendar invite: {e}")
+        raise
+
+
+async def _send_exchange_calendar_invite_async(
+    emails: List[str],
+    title: str,
+    start_time: str,
+    end_time: str,
+    user_email: str,
+    timezone: str = "UTC",
+    tenant_id: Optional[str] = None,
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
+) -> bool:
+    """Async implementation of Exchange calendar invite sending.
+    
+    Args:
+        emails: List of email addresses to invite
+        title: Meeting title/subject
+        start_time: Meeting start time in ISO format
+        end_time: Meeting end time in ISO format
+        user_email: User's Exchange email address
+        timezone: Timezone for the meeting
+        tenant_id: Azure AD tenant ID
+        client_id: Azure AD client ID
+        client_secret: Azure AD client secret
+        
+    Returns:
+        bool: True if calendar invite was sent successfully
+        
+    Raises:
+        ValueError: If validation fails
+        Exception: If API call fails
+    """
+    # Validate inputs
+    _validate_calendar_invite_inputs(emails, title, start_time, end_time, user_email, timezone)
+    
+    # Get authentication credentials
+    credentials = await get_exchange_credentials(
+        user_email=user_email,
+        tenant_id=tenant_id,
+        client_id=client_id,
+        client_secret=client_secret
+    )
+    
+    # Build event object
+    event_data = _build_exchange_event_object(
+        emails=emails,
+        title=title,
+        start_time=start_time,
+        end_time=end_time,
+        timezone=timezone
+    )
+    
+    # Send calendar invite via Microsoft Graph API
+    graph_url = "https://graph.microsoft.com/v1.0/me/events"
+    headers = {
+        "Authorization": f"Bearer {credentials['access_token']}",
+        "Content-Type": "application/json"
+    }
+    
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                graph_url,
+                headers=headers,
+                json=event_data,
+                timeout=30
+            )
+            
+            if response.status_code == 201:
+                logger.info(f"Calendar invite sent successfully for meeting: {title}")
+                return True
+            elif response.status_code == 429:
+                # Rate limiting - respect Retry-After header
+                retry_after = int(response.headers.get('Retry-After', 60))
+                logger.warning(f"Rate limited, retrying after {retry_after} seconds")
+                await asyncio.sleep(retry_after)
+                continue
+            else:
+                error_msg = f"Failed to create calendar event: {response.status_code} - {response.text}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
+                
+        except requests.exceptions.RequestException as e:
+            if attempt == max_retries - 1:
+                logger.error(f"Request failed after {max_retries} attempts: {e}")
+                raise Exception(f"Failed to send calendar invite: {e}")
+            
+            # Exponential backoff for transient failures
+            await asyncio.sleep(2 ** attempt)
+    
+    return False
+
+
+def _validate_calendar_invite_inputs(
+    emails: List[str],
+    title: str,
+    start_time: str,
+    end_time: str,
+    user_email: str,
+    timezone: str
+) -> None:
+    """Validate calendar invite input parameters.
+    
+    Args:
+        emails: List of email addresses to invite
+        title: Meeting title/subject
+        start_time: Meeting start time in ISO format
+        end_time: Meeting end time in ISO format
+        user_email: User's Exchange email address
+        timezone: Timezone for the meeting
+        
+    Raises:
+        ValueError: If any validation fails
+    """
+    import re
+    from datetime import datetime
+    
+    # Validate emails list
+    if not emails or not isinstance(emails, list):
+        raise ValueError("Emails must be a non-empty list")
+    
+    # Validate email format
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    for email in emails:
+        if not isinstance(email, str) or not re.match(email_pattern, email):
+            raise ValueError(f"Invalid email address: {email}")
+    
+    # Validate title
+    if not title or not isinstance(title, str) or title.strip() == "":
+        raise ValueError("Title must be a non-empty string")
+    
+    # Validate user email
+    if not user_email or not isinstance(user_email, str) or not re.match(email_pattern, user_email):
+        raise ValueError("Invalid user email address")
+    
+    # Validate datetime formats
+    try:
+        start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+        end_dt = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+        
+        if end_dt <= start_dt:
+            raise ValueError("End time must be after start time")
+            
+    except ValueError as e:
+        raise ValueError(f"Invalid datetime format: {e}")
+    
+    # Validate timezone
+    if not timezone or not isinstance(timezone, str):
+        raise ValueError("Timezone must be a non-empty string")
+
+
+def _build_exchange_event_object(
+    emails: List[str],
+    title: str,
+    start_time: str,
+    end_time: str,
+    timezone: str
+) -> dict:
+    """Build Exchange event object for Microsoft Graph API.
+    
+    Args:
+        emails: List of email addresses to invite
+        title: Meeting title/subject
+        start_time: Meeting start time in ISO format
+        end_time: Meeting end time in ISO format
+        timezone: Timezone for the meeting
+        
+    Returns:
+        dict: Event object formatted for Microsoft Graph API
+    """
+    # Build attendees list
+    attendees = []
+    for email in emails:
+        attendees.append({
+            "emailAddress": {
+                "address": email,
+                "name": email.split('@')[0]  # Use email prefix as name
+            },
+            "type": "required"
+        })
+    
+    # Format datetime for Exchange
+    start_formatted = _format_datetime_for_exchange(start_time, timezone)
+    end_formatted = _format_datetime_for_exchange(end_time, timezone)
+    
+    # Build event object
+    event_data = {
+        "subject": title,
+        "start": start_formatted,
+        "end": end_formatted,
+        "attendees": attendees,
+        "isOnlineMeeting": True,  # Enable Teams meeting
+        "onlineMeetingProvider": "teamsForBusiness",
+        "reminderMinutesBeforeStart": 15,  # Default reminder
+        "showAs": "busy",
+        "importance": "normal",
+        "sensitivity": "normal",
+        "allowNewTimeProposals": True
+    }
+    
+    return event_data
+
+
+def _format_datetime_for_exchange(datetime_str: str, timezone: str) -> dict:
+    """Format datetime string for Exchange API.
+    
+    Args:
+        datetime_str: ISO format datetime string
+        timezone: Timezone identifier
+        
+    Returns:
+        dict: Formatted datetime object for Exchange
+    """
+    from datetime import datetime
+    import pytz
+    
+    # Parse datetime
+    dt = datetime.fromisoformat(datetime_str.replace('Z', '+00:00'))
+    
+    # Handle timezone conversion
+    if timezone.upper() == "UTC":
+        tz_name = "UTC"
+    elif timezone.upper() in ["PST", "PDT", "PT"]:
+        tz_name = "Pacific Standard Time"
+    elif timezone.upper() in ["EST", "EDT", "ET"]:
+        tz_name = "Eastern Standard Time"
+    elif timezone.upper() in ["CST", "CDT", "CT"]:
+        tz_name = "Central Standard Time"
+    elif timezone.upper() in ["MST", "MDT", "MT"]:
+        tz_name = "Mountain Standard Time"
+    else:
+        # Try to use timezone as-is
+        tz_name = timezone
+    
+    # Format for Exchange
+    return {
+        "dateTime": dt.strftime("%Y-%m-%dT%H:%M:%S.0000000"),
+        "timeZone": tz_name
+    }
 
 
 # Helper functions for future implementation
