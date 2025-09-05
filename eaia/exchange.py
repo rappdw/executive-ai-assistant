@@ -295,9 +295,198 @@ async def fetch_exchange_emails(
         ValueError: If authentication fails
         Exception: If API call fails
     """
-    # TODO: Implement Exchange email fetching using Microsoft Graph API
-    # This will be implemented in Stage 3
-    raise NotImplementedError("Exchange email fetching will be implemented in Stage 3")
+    logger.info(f"Fetching Exchange emails for {user_email} from last {minutes_since} minutes")
+    
+    # Get authentication parameters
+    if not all([tenant_id, client_id, client_secret]):
+        tenant_id, client_id, client_secret = get_exchange_auth_from_env()
+    
+    # Get authenticated credentials
+    try:
+        credentials = await get_exchange_credentials(
+            user_email=user_email,
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret
+        )
+    except Exception as e:
+        logger.error(f"Failed to get Exchange credentials: {e}")
+        raise ValueError(f"Authentication failed: {e}")
+    
+    # Calculate time filter for Microsoft Graph API
+    from datetime import datetime, timedelta, timezone
+    cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=minutes_since)
+    filter_time = cutoff_time.isoformat().replace('+00:00', 'Z')
+    
+    # Build Microsoft Graph API request
+    graph_url = "https://graph.microsoft.com/v1.0/me/messages"
+    headers = {
+        "Authorization": f"Bearer {credentials['access_token']}",
+        "Content-Type": "application/json"
+    }
+    
+    # Query parameters for filtering and pagination
+    params = {
+        "$filter": f"receivedDateTime ge {filter_time}",
+        "$orderby": "receivedDateTime desc",
+        "$top": 50,  # Page size
+        "$select": "id,conversationId,subject,from,toRecipients,receivedDateTime,body,isRead"
+    }
+    
+    emails = []
+    next_link = None
+    
+    try:
+        import requests
+        import asyncio
+        
+        while True:
+            # Use next_link if available, otherwise use base URL with params
+            if next_link:
+                response = requests.get(next_link, headers=headers, timeout=30)
+            else:
+                response = requests.get(graph_url, headers=headers, params=params, timeout=30)
+            
+            # Handle rate limiting
+            if response.status_code == 429:
+                retry_after = int(response.headers.get('Retry-After', 60))
+                logger.warning(f"Rate limited, waiting {retry_after} seconds")
+                await asyncio.sleep(retry_after)
+                continue
+            
+            response.raise_for_status()
+            data = response.json()
+            
+            # Process messages in this page
+            messages = data.get('value', [])
+            for message in messages:
+                try:
+                    email_data = convert_exchange_message_to_email_data(message)
+                    emails.append(email_data)
+                except Exception as e:
+                    logger.warning(f"Failed to convert message {message.get('id', 'unknown')}: {e}")
+                    continue
+            
+            # Check for next page
+            next_link = data.get('@odata.nextLink')
+            if not next_link:
+                break
+                
+            logger.debug(f"Fetched {len(messages)} messages, continuing to next page")
+    
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Microsoft Graph API request failed: {e}")
+        raise Exception(f"Failed to fetch emails from Exchange: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error fetching Exchange emails: {e}")
+        raise
+    
+    logger.info(f"Successfully fetched {len(emails)} Exchange emails")
+    return emails
+
+
+def convert_exchange_message_to_email_data(exchange_msg: dict) -> EmailData:
+    """Convert Exchange message format to EmailData schema.
+    
+    Args:
+        exchange_msg: Raw message from Microsoft Graph API
+        
+    Returns:
+        EmailData: Converted email data matching Gmail module format
+        
+    Raises:
+        KeyError: If required fields are missing from exchange message
+        ValueError: If message format is invalid
+    """
+    try:
+        # Extract basic message information
+        message_id = exchange_msg["id"]
+        thread_id = exchange_msg.get("conversationId", message_id)  # Fallback to message ID
+        subject = exchange_msg.get("subject", "")
+        received_time = exchange_msg.get("receivedDateTime", "")
+        
+        # Extract sender information
+        from_info = exchange_msg.get("from", {})
+        if from_info and "emailAddress" in from_info:
+            from_email = from_info["emailAddress"].get("address", "")
+        else:
+            from_email = ""
+        
+        # Extract recipient information (use first recipient as primary)
+        to_recipients = exchange_msg.get("toRecipients", [])
+        if to_recipients and len(to_recipients) > 0:
+            to_email = to_recipients[0]["emailAddress"].get("address", "")
+        else:
+            to_email = ""
+        
+        # Extract and process message body
+        body_content = extract_exchange_message_body(exchange_msg.get("body", {}))
+        
+        return EmailData(
+            id=message_id,
+            thread_id=thread_id,
+            from_email=from_email,
+            to_email=to_email,
+            subject=subject,
+            page_content=body_content,
+            send_time=received_time
+        )
+        
+    except KeyError as e:
+        logger.error(f"Missing required field in Exchange message: {e}")
+        raise KeyError(f"Invalid Exchange message format: missing {e}")
+    except Exception as e:
+        logger.error(f"Error converting Exchange message: {e}")
+        raise ValueError(f"Failed to convert Exchange message: {e}")
+
+
+def extract_exchange_message_body(body: dict) -> str:
+    """Extract message body content from Exchange message body object.
+    
+    Args:
+        body: Body object from Microsoft Graph message
+        
+    Returns:
+        str: Plain text content of the message body
+    """
+    import re
+    from html import unescape
+    
+    if not body:
+        return "No message body available."
+    
+    content = body.get("content", "")
+    content_type = body.get("contentType", "text").lower()
+    
+    if not content:
+        return "No message body available."
+    
+    # Handle HTML content
+    if content_type == "html":
+        try:
+            # Remove HTML tags and decode HTML entities
+            # First remove script and style elements completely
+            content = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', content, flags=re.DOTALL | re.IGNORECASE)
+            
+            # Remove HTML tags but keep the content
+            content = re.sub(r'<[^>]+>', '', content)
+            
+            # Decode HTML entities
+            content = unescape(content)
+            
+            # Clean up whitespace
+            content = re.sub(r'\s+', ' ', content).strip()
+            
+        except Exception as e:
+            logger.warning(f"Failed to parse HTML content: {e}")
+            # Fall back to raw content if HTML parsing fails
+    
+    # Handle plain text content (or fallback from HTML)
+    if content_type == "text" or not content.strip():
+        # Clean up whitespace for plain text
+        content = re.sub(r'\s+', ' ', content).strip() if content else ""
+    
+    return content if content else "No message body available."
 
 
 def send_exchange_email(
