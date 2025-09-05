@@ -989,9 +989,271 @@ def get_exchange_events_for_days(
         ValueError: If authentication fails or required parameters are missing
         Exception: If API call fails
     """
-    # TODO: Implement Exchange calendar event retrieval using Microsoft Graph API
-    # This will be implemented in Stage 6
-    raise NotImplementedError("Exchange calendar event retrieval will be implemented in Stage 6")
+    import asyncio
+    from .main.config import get_config
+    from langchain_core.runnables.config import ensure_config
+    
+    try:
+        # Get user email from config if not provided
+        if not user_email:
+            config = ensure_config()
+            user_config = get_config(config)
+            user_email = user_config["email"]
+        
+        # Run async calendar retrieval
+        return asyncio.run(_fetch_exchange_calendar_events(
+            date_strs=date_strs,
+            user_email=user_email,
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret
+        ))
+        
+    except Exception as e:
+        logger.error(f"Error retrieving Exchange calendar events: {e}")
+        raise
+
+
+async def _fetch_exchange_calendar_events(
+    date_strs: List[str],
+    user_email: str,
+    tenant_id: Optional[str] = None,
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
+) -> str:
+    """Fetch Exchange calendar events for specified days using Microsoft Graph API.
+    
+    Args:
+        date_strs: List of date strings in dd-mm-yyyy format
+        user_email: User's Exchange email address
+        tenant_id: Azure AD tenant ID (optional, can be from env)
+        client_id: Azure AD client ID (optional, can be from env)
+        client_secret: Azure AD client secret (optional, can be from env)
+        
+    Returns:
+        str: Formatted string containing events for the specified days
+        
+    Raises:
+        ValueError: If authentication fails or required parameters are missing
+        Exception: If API call fails
+    """
+    import requests
+    import asyncio
+    from datetime import datetime, time
+    
+    try:
+        # Get authentication credentials
+        credentials = await get_exchange_credentials(
+            user_email=user_email,
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret
+        )
+        
+        headers = {
+            "Authorization": f"Bearer {credentials['access_token']}",
+            "Content-Type": "application/json"
+        }
+        
+        results = ""
+        
+        for date_str in date_strs:
+            try:
+                # Parse date string (dd-mm-yyyy format)
+                day = datetime.strptime(date_str, "%d-%m-%Y").date()
+                
+                # Create start and end of day in ISO format
+                start_of_day = datetime.combine(day, time.min).isoformat() + "Z"
+                end_of_day = datetime.combine(day, time.max).isoformat() + "Z"
+                
+                # Build Graph API URL with filters
+                graph_url = "https://graph.microsoft.com/v1.0/me/events"
+                params = {
+                    "$filter": f"start/dateTime ge '{start_of_day}' and end/dateTime le '{end_of_day}'",
+                    "$orderby": "start/dateTime",
+                    "$select": "subject,start,end,location,bodyPreview,isAllDay,organizer,attendees"
+                }
+                
+                # Execute API call with retry logic
+                max_retries = 3
+                events = []
+                
+                for attempt in range(max_retries):
+                    try:
+                        response = requests.get(
+                            graph_url,
+                            headers=headers,
+                            params=params,
+                            timeout=30
+                        )
+                        
+                        if response.status_code == 200:
+                            events_data = response.json()
+                            events = events_data.get("value", [])
+                            break
+                            
+                        elif response.status_code == 429:  # Rate limited
+                            retry_after = int(response.headers.get('Retry-After', 60))
+                            logger.warning(f"Calendar API rate limited, retrying after {retry_after} seconds")
+                            await asyncio.sleep(retry_after)
+                            continue
+                            
+                        else:
+                            error_msg = f"Failed to retrieve calendar events. Status: {response.status_code}, Response: {response.text}"
+                            logger.error(error_msg)
+                            if attempt == max_retries - 1:  # Last attempt
+                                raise Exception(error_msg)
+                                
+                    except requests.exceptions.RequestException as e:
+                        logger.error(f"Calendar request failed on attempt {attempt + 1}: {e}")
+                        if attempt == max_retries - 1:  # Last attempt
+                            raise Exception(f"Failed to retrieve calendar events after {max_retries} attempts: {e}")
+                        await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                
+                # Format events for this day
+                results += f"***FOR DAY {date_str}***\n\n" + _format_exchange_events(events)
+                
+            except ValueError as e:
+                logger.error(f"Invalid date format '{date_str}': {e}")
+                results += f"***FOR DAY {date_str}***\n\nError: Invalid date format. Expected dd-mm-yyyy.\n\n"
+                
+        return results
+        
+    except Exception as e:
+        logger.error(f"Error fetching Exchange calendar events: {e}")
+        raise
+
+
+def _format_exchange_events(events: List[dict]) -> str:
+    """Format Exchange events to match Gmail calendar output format.
+    
+    Args:
+        events: List of Exchange event dictionaries from Graph API
+        
+    Returns:
+        str: Formatted events string matching Gmail format
+    """
+    if not events:
+        return "No events found for this day.\n\n"
+    
+    result = ""
+    
+    for event in events:
+        try:
+            # Convert Exchange event to Gmail-compatible format
+            converted_event = _convert_exchange_event(event)
+            
+            start = converted_event["start"].get("dateTime", converted_event["start"].get("date"))
+            end = converted_event["end"].get("dateTime", converted_event["end"].get("date"))
+            summary = converted_event.get("summary", "No Title")
+            
+            # Format datetime if it contains time information
+            if "T" in start:  # Only format if it's a datetime
+                start = _format_datetime_with_timezone(start)
+                end = _format_datetime_with_timezone(end)
+            
+            result += f"Event: {summary}\n"
+            result += f"Starts: {start}\n"
+            result += f"Ends: {end}\n"
+            result += "-" * 40 + "\n"
+            
+        except Exception as e:
+            logger.warning(f"Error formatting event: {e}")
+            # Include basic event info even if formatting fails
+            subject = event.get("subject", "Unknown Event")
+            result += f"Event: {subject}\n"
+            result += f"Error: Could not format event details\n"
+            result += "-" * 40 + "\n"
+    
+    return result
+
+
+def _convert_exchange_event(exchange_event: dict) -> dict:
+    """Convert Exchange event format to Gmail-compatible format.
+    
+    Args:
+        exchange_event: Exchange event dictionary from Graph API
+        
+    Returns:
+        dict: Event in Gmail-compatible format
+    """
+    try:
+        # Map Exchange event fields to Gmail format
+        converted = {
+            "summary": exchange_event.get("subject", "No Title"),
+            "start": {},
+            "end": {}
+        }
+        
+        # Handle start time
+        start_info = exchange_event.get("start", {})
+        if exchange_event.get("isAllDay", False):
+            # All-day event - use date only
+            start_date = start_info.get("dateTime", "").split("T")[0] if start_info.get("dateTime") else ""
+            converted["start"]["date"] = start_date
+        else:
+            # Timed event - use dateTime
+            converted["start"]["dateTime"] = start_info.get("dateTime", "")
+            converted["start"]["timeZone"] = start_info.get("timeZone", "UTC")
+        
+        # Handle end time
+        end_info = exchange_event.get("end", {})
+        if exchange_event.get("isAllDay", False):
+            # All-day event - use date only
+            end_date = end_info.get("dateTime", "").split("T")[0] if end_info.get("dateTime") else ""
+            converted["end"]["date"] = end_date
+        else:
+            # Timed event - use dateTime
+            converted["end"]["dateTime"] = end_info.get("dateTime", "")
+            converted["end"]["timeZone"] = end_info.get("timeZone", "UTC")
+        
+        # Add optional fields if available
+        if "location" in exchange_event and exchange_event["location"]:
+            converted["location"] = exchange_event["location"].get("displayName", "")
+        
+        if "bodyPreview" in exchange_event:
+            converted["description"] = exchange_event["bodyPreview"]
+        
+        return converted
+        
+    except Exception as e:
+        logger.error(f"Error converting Exchange event: {e}")
+        # Return minimal event structure
+        return {
+            "summary": exchange_event.get("subject", "Unknown Event"),
+            "start": {"dateTime": exchange_event.get("start", {}).get("dateTime", "")},
+            "end": {"dateTime": exchange_event.get("end", {}).get("dateTime", "")}
+        }
+
+
+def _format_datetime_with_timezone(dt_str: str, timezone: str = "US/Pacific") -> str:
+    """Format a datetime string with the specified timezone.
+    
+    Args:
+        dt_str: The datetime string to format
+        timezone: The timezone to use for formatting (default: US/Pacific)
+        
+    Returns:
+        str: Formatted datetime string with timezone abbreviation
+    """
+    try:
+        import pytz
+        from datetime import datetime
+        
+        # Parse the datetime string
+        dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+        
+        # Convert to specified timezone
+        tz = pytz.timezone(timezone)
+        dt = dt.astimezone(tz)
+        
+        # Format as expected by Gmail format
+        return dt.strftime("%Y-%m-%d %I:%M %p %Z")
+        
+    except Exception as e:
+        logger.warning(f"Error formatting datetime '{dt_str}': {e}")
+        # Return original string if formatting fails
+        return dt_str
 
 
 def send_exchange_calendar_invite(
