@@ -489,7 +489,148 @@ def extract_exchange_message_body(body: dict) -> str:
     return content if content else "No message body available."
 
 
-def send_exchange_email(
+def _get_original_message(message_id: str, credentials: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Get the original message for reply context.
+    
+    Args:
+        message_id: ID of the original message
+        credentials: Authentication credentials dictionary
+        
+    Returns:
+        Dict containing the original message data, or None if not found
+    """
+    import requests
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {credentials['access_token']}",
+            "Content-Type": "application/json"
+        }
+        
+        graph_url = f"https://graph.microsoft.com/v1.0/me/messages/{message_id}"
+        
+        response = requests.get(graph_url, headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            logger.error(f"Failed to get original message. Status: {response.status_code}, Response: {response.text}")
+            return None
+            
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request failed when getting original message: {e}")
+        return None
+
+
+def get_exchange_recipients(original_message: Dict[str, Any], addn_recipients: Optional[List[str]] = None) -> Dict[str, List[Dict[str, str]]]:
+    """Extract recipients from original message and add additional recipients.
+    
+    Args:
+        original_message: The original Exchange message
+        addn_recipients: Additional recipient email addresses
+        
+    Returns:
+        Dict with 'toRecipients', 'ccRecipients', and 'bccRecipients' lists
+    """
+    recipients = {
+        "toRecipients": [],
+        "ccRecipients": [],
+        "bccRecipients": []
+    }
+    
+    # Add the sender of the original message as the primary recipient
+    sender = original_message.get("from", {}).get("emailAddress", {})
+    if sender.get("address"):
+        recipients["toRecipients"].append({
+            "emailAddress": {
+                "address": sender["address"],
+                "name": sender.get("name", sender["address"])
+            }
+        })
+    
+    # Add original CC recipients (excluding the current user)
+    original_cc = original_message.get("ccRecipients", [])
+    for cc_recipient in original_cc:
+        email_addr = cc_recipient.get("emailAddress", {})
+        if email_addr.get("address"):
+            recipients["ccRecipients"].append({
+                "emailAddress": {
+                    "address": email_addr["address"],
+                    "name": email_addr.get("name", email_addr["address"])
+                }
+            })
+    
+    # Add additional recipients to CC if provided
+    if addn_recipients:
+        for email in addn_recipients:
+            recipients["ccRecipients"].append({
+                "emailAddress": {
+                    "address": email,
+                    "name": email
+                }
+            })
+    
+    return recipients
+
+
+def create_exchange_message(
+    original_message: Dict[str, Any],
+    response_text: str,
+    recipients: Dict[str, List[Dict[str, str]]],
+    user_email: str
+) -> Dict[str, Any]:
+    """Create a properly formatted Exchange message for sending.
+    
+    Args:
+        original_message: The original message being replied to
+        response_text: The reply text content
+        recipients: Recipients dictionary from get_exchange_recipients
+        user_email: The sender's email address
+        
+    Returns:
+        Dict containing the formatted message for Microsoft Graph API
+    """
+    # Build the reply subject
+    original_subject = original_message.get("subject", "")
+    if not original_subject.lower().startswith("re:"):
+        reply_subject = f"Re: {original_subject}"
+    else:
+        reply_subject = original_subject
+    
+    # Create message body with proper formatting
+    message_body = {
+        "contentType": "text",
+        "content": response_text
+    }
+    
+    # Build the message structure for Graph API
+    message = {
+        "subject": reply_subject,
+        "body": message_body,
+        "toRecipients": recipients["toRecipients"],
+        "ccRecipients": recipients["ccRecipients"],
+        "bccRecipients": recipients["bccRecipients"]
+    }
+    
+    # Add reply threading headers for proper conversation threading
+    conversation_id = original_message.get("conversationId")
+    if conversation_id:
+        # Use internetMessageHeaders to maintain threading
+        message["internetMessageHeaders"] = [
+            {
+                "name": "In-Reply-To",
+                "value": original_message.get("internetMessageId", "")
+            },
+            {
+                "name": "References", 
+                "value": original_message.get("internetMessageId", "")
+            }
+        ]
+    
+    return message
+
+
+async def send_exchange_email(
     message_id: str,
     response_text: str,
     user_email: str,
@@ -518,9 +659,79 @@ def send_exchange_email(
         ValueError: If authentication fails or required parameters are missing
         Exception: If API call fails
     """
-    # TODO: Implement Exchange email sending using Microsoft Graph API
-    # This will be implemented in Stage 4
-    raise NotImplementedError("Exchange email sending will be implemented in Stage 4")
+    import requests
+    
+    try:
+        # Get authentication credentials
+        credentials = await get_exchange_credentials(
+            user_email=user_email,
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret
+        )
+        
+        # Get original message for reply context
+        original_message = _get_original_message(message_id, credentials)
+        if not original_message:
+            raise ValueError(f"Could not retrieve original message with ID: {message_id}")
+        
+        # Get recipients for the reply
+        recipients = get_exchange_recipients(original_message, addn_recipients)
+        
+        # Create the reply message
+        reply_message = create_exchange_message(
+            original_message=original_message,
+            response_text=response_text,
+            recipients=recipients,
+            user_email=user_email
+        )
+        
+        # Send the email via Microsoft Graph API
+        headers = {
+            "Authorization": f"Bearer {credentials['access_token']}",
+            "Content-Type": "application/json"
+        }
+        
+        graph_url = "https://graph.microsoft.com/v1.0/me/sendMail"
+        
+        # Retry logic for transient failures
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    graph_url,
+                    headers=headers,
+                    json={"message": reply_message},
+                    timeout=30
+                )
+                
+                if response.status_code == 202:  # Accepted - email queued for sending
+                    logger.info(f"Email reply sent successfully for message ID: {message_id}")
+                    return True
+                elif response.status_code == 429:  # Rate limited
+                    retry_after = int(response.headers.get('Retry-After', 60))
+                    logger.warning(f"Rate limited, retrying after {retry_after} seconds")
+                    import asyncio
+                    await asyncio.sleep(retry_after)
+                    continue
+                else:
+                    error_msg = f"Failed to send email. Status: {response.status_code}, Response: {response.text}"
+                    logger.error(error_msg)
+                    if attempt == max_retries - 1:  # Last attempt
+                        raise Exception(error_msg)
+                    
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Request failed on attempt {attempt + 1}: {e}")
+                if attempt == max_retries - 1:  # Last attempt
+                    raise Exception(f"Failed to send email after {max_retries} attempts: {e}")
+                import asyncio
+                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+        
+        return False
+        
+    except Exception as e:
+        logger.error(f"Error sending Exchange email: {e}")
+        raise
 
 
 def mark_exchange_as_read(
