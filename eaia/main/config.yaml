@@ -1,5 +1,19 @@
 email: ...
 full_name: Harrison Chase
+
+# Email Provider Configuration
+email_provider: "gmail"  # Default to gmail for backward compatibility
+
+# Exchange Configuration (used when email_provider is "exchange")
+exchange_config:
+  tenant_id: "${EXCHANGE_TENANT_ID}"
+  client_id: "${EXCHANGE_CLIENT_ID}"
+  client_secret: "${EXCHANGE_CLIENT_SECRET}"
+
+# Gmail Configuration (used when email_provider is "gmail" - optional for backward compatibility)
+gmail_config:
+  gmail_secret: "${GMAIL_SECRET}"
+  gmail_token: "${GMAIL_TOKEN}"
 name: Harrison
 background: Harrison is CEO and co-founder of LangChain. LangChain is a startup building tools for developers to build LLM applications.
 schedule_preferences: By default, unless specified otherwise, you should make meetings 30 minutes long.
